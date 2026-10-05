@@ -2,10 +2,11 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query
 
-from agent.analyzer import analyze_latest, analyze_task
+from agent.analyzer import SEVERITY_ORDER, analyze_latest, analyze_task
 from agent.database import get_connection, init_db
+from agent.findings import decode
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 TASK_NOT_FOUND = "Task not found"
 
 
@@ -108,4 +109,36 @@ def task_analysis(task_id: str):
 
 @app.get("/analysis")
 def analysis():
-    return {"alerts": analyze_latest()}
+    return {"findings": analyze_latest()}
+
+
+@app.get("/findings")
+def findings(
+    status: str | None = "open",
+    severity: str | None = None,
+    detector: str | None = None,
+    task_id: str | None = None,
+    limit: int = Query(100, ge=1, le=1000),
+):
+    sql = "SELECT * FROM findings WHERE 1=1"
+    p = []
+    for column, value in (
+        ("status", status),
+        ("severity", severity),
+        ("detector", detector),
+        ("task_id", task_id),
+    ):
+        if value:
+            sql += f" AND {column}=?"
+            p.append(value)
+    sql += f" ORDER BY {SEVERITY_ORDER}, last_seen DESC LIMIT ?"
+    p.append(limit)
+    return [decode(r) for r in _fetch_all(sql, p)]
+
+
+@app.get("/findings/{finding_id}")
+def finding(finding_id: int):
+    row = _fetch_one("SELECT * FROM findings WHERE id=?", (finding_id,))
+    if not row:
+        raise HTTPException(status_code=404, detail="Finding not found")
+    return decode(row)

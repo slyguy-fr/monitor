@@ -31,3 +31,22 @@ def test_task_filters(client):
 def test_task_history_and_analysis(client):
     assert len(client.get("/tasks/a/history").json()) == 2
     assert client.get("/tasks/a/analysis").json()["statistics"]["samples"] == 2
+
+
+def test_findings_endpoints(client):
+    from agent.config import Thresholds
+    from agent.findings import run_analysis
+    from tests.helpers import Timeline, service
+
+    tl = Timeline()
+    tl.cycle([service("vnc.service", "failed", "failed", result="exit-code")])
+    run_analysis(tl.conn, Thresholds())
+    found = client.get("/findings").json()
+    assert [f["detector"] for f in found] == ["service_failed"]
+    assert found[0]["evidence"]["result"] == "exit-code"
+    assert client.get(f"/findings/{found[0]['id']}").json()["key"] == found[0]["key"]
+    assert client.get("/findings/999").status_code == 404
+    assert client.get("/findings?status=resolved").json() == []
+    assert client.get("/analysis").json()["findings"][0]["id"] == found[0]["id"]
+    task = client.get("/tasks/svc-vnc.service/analysis").json()
+    assert [f["detector"] for f in task["findings"]] == ["service_failed"]

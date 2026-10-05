@@ -154,3 +154,46 @@ def test_service_unit_from_cgroup():
 def test_kernel_thread_detection():
     assert is_kernel_thread({"exe": None, "cmdline": [], "ppid": 2})
     assert not is_kernel_thread({"exe": "/usr/bin/x", "cmdline": ["x"], "ppid": 2})
+
+
+def test_zombie_children_dstate_and_fd_usage_are_attributed():
+    tasks = build_process_tasks(
+        [
+            proc(10, "/usr/bin/parent", ["parent"], num_fds=900, fd_limit=1000),
+            proc(20, "", [], name="defunct", ppid=10, status="zombie", num_fds=None),
+            proc(21, "", [], name="defunct", ppid=10, status="zombie", num_fds=None),
+            proc(30, "/usr/bin/io", ["io"], status="disk-sleep"),
+        ]
+    )
+    by_name = {t["name"]: t for t in tasks}
+    assert by_name["parent"]["zombie_children"] == 2
+    assert by_name["parent"]["fd_usage_percent"] == 90.0
+    assert by_name["io"]["dstate_count"] == 1
+    assert by_name["defunct"]["process_count"] == 2
+
+
+def test_proc_parsers():
+    from agent.collector import parse_fd_limit, parse_psi_avg60, parse_vmstat_counter
+
+    assert parse_psi_avg60("some avg10=1.00 avg60=12.50 avg300=3.00 total=1\nfull avg10=0") == 12.5
+    assert parse_vmstat_counter("pgfault 10\noom_kill 3\n", "oom_kill") == 3
+    limits = "Max open files            1024                 524288               files\n"
+    assert parse_fd_limit(limits) == 1024
+
+
+def test_idle_services_only_store_samples_on_change():
+    collector = SystemdCollector()
+    units = parse_list_units(LIST_UNITS)
+    details = parse_systemctl_show(SHOW)
+    first = {t["name"]: t["store_sample"] for t in collector.build_tasks(units, details, 1, 1)}
+    assert all(first.values())
+    second = {t["name"]: t["store_sample"] for t in collector.build_tasks(units, details, 2, 1)}
+    assert second == {
+        "cron.service": True,
+        "vncserver.service": False,
+        "zfs-mount.service": False,
+        "foo.service": False,
+    }
+    changed = details | {"vncserver.service": {**details["vncserver.service"], "NRestarts": "4"}}
+    third = {t["name"]: t["store_sample"] for t in collector.build_tasks(units, changed, 3, 1)}
+    assert third["vncserver.service"] is True

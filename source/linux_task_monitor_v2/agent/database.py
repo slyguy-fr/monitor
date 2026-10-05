@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from .config import load_settings
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
 BASE_SCHEMA = [
@@ -55,7 +55,118 @@ MIGRATIONS = {
         """UPDATE tasks SET status = CASE
             WHEN status IN ('ok', 'warning', 'critical', 'gone') THEN status ELSE 'ok' END""",
     ],
+    3: [
+        *[
+            f"ALTER TABLE samples ADD COLUMN {column}"
+            for column in (
+                "load5 REAL",
+                "load15 REAL",
+                "cpu_count INTEGER",
+                "mem_total_bytes INTEGER",
+                "mem_available_bytes INTEGER",
+                "swap_percent REAL",
+                "iowait_percent REAL",
+                "psi_cpu_some REAL",
+                "psi_memory_some REAL",
+                "psi_io_some REAL",
+                "oom_kill_total INTEGER",
+            )
+        ],
+        *[
+            f"ALTER TABLE task_samples ADD COLUMN {column}"
+            for column in (
+                "zombie_children INTEGER",
+                "dstate_count INTEGER",
+                "fd_usage_percent REAL",
+                "restarts INTEGER",
+            )
+        ],
+        """CREATE TABLE disk_samples(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sample_id INTEGER NOT NULL,
+            timestamp TEXT NOT NULL,
+            mountpoint TEXT NOT NULL,
+            device TEXT,
+            fstype TEXT,
+            total_bytes INTEGER,
+            used_bytes INTEGER,
+            free_bytes INTEGER,
+            used_percent REAL,
+            inodes_percent REAL)""",
+        "CREATE INDEX idx_disk_samples_mount_ts ON disk_samples(mountpoint, timestamp)",
+        "CREATE INDEX idx_disk_samples_ts ON disk_samples(timestamp)",
+        """CREATE TABLE findings(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            key TEXT NOT NULL,
+            detector TEXT NOT NULL,
+            severity TEXT NOT NULL,
+            subject_type TEXT NOT NULL,
+            subject TEXT NOT NULL,
+            task_id TEXT,
+            title TEXT NOT NULL,
+            evidence TEXT NOT NULL DEFAULT '{}',
+            status TEXT NOT NULL DEFAULT 'open',
+            first_seen TEXT NOT NULL,
+            last_seen TEXT NOT NULL,
+            resolved_at TEXT,
+            misses INTEGER NOT NULL DEFAULT 0)""",
+        "CREATE UNIQUE INDEX idx_findings_open_key ON findings(key) WHERE status='open'",
+        "CREATE INDEX idx_findings_status ON findings(status, severity)",
+        "CREATE INDEX idx_findings_task ON findings(task_id)",
+    ],
 }
+
+SEVERITY_RANK = {"ok": 0, "info": 0, "warning": 1, "critical": 2}
+
+SAMPLE_COLUMNS = [
+    "timestamp",
+    "hostname",
+    "cpu_percent",
+    "memory_percent",
+    "load1",
+    "load5",
+    "load15",
+    "disk_used_percent",
+    "cpu_count",
+    "mem_total_bytes",
+    "mem_available_bytes",
+    "swap_percent",
+    "iowait_percent",
+    "psi_cpu_some",
+    "psi_memory_some",
+    "psi_io_some",
+    "oom_kill_total",
+]
+TASK_SAMPLE_COLUMNS = [
+    "pid",
+    "raw_status",
+    "cpu_percent",
+    "memory_percent",
+    "rss_bytes",
+    "process_count",
+    "num_threads",
+    "num_fds",
+    "zombie_children",
+    "dstate_count",
+    "fd_usage_percent",
+    "restarts",
+]
+DISK_COLUMNS = [
+    "mountpoint",
+    "device",
+    "fstype",
+    "total_bytes",
+    "used_bytes",
+    "free_bytes",
+    "used_percent",
+    "inodes_percent",
+]
+
+
+def _insert_sql(table, columns):
+    names = ",".join(columns)
+    values = ",".join(f":{c}" for c in columns)
+    return f"INSERT INTO {table}({names}) VALUES({values})"
 
 
 def connect(db_path=None):
@@ -100,21 +211,31 @@ def init_db(conn=None):
             conn.close()
 
 
-def store_cycle(conn, sample, tasks):
+def apply_task_status(conn):
+    """Raise tasks.status to the highest severity of their open findings."""
+    rows = conn.execute(
+        """SELECT t.task_id, t.status, f.severity FROM tasks t
+           JOIN findings f ON f.task_id = t.task_id
+           WHERE f.status = 'open' AND t.state = 'active'"""
+    ).fetchall()
+    worst = {}
+    for r in rows:
+        current = worst.get(r["task_id"], r["status"])
+        if SEVERITY_RANK.get(r["severity"], 0) > SEVERITY_RANK.get(current, 0):
+            current = r["severity"]
+        worst[r["task_id"]] = current
+    conn.executemany(
+        "UPDATE tasks SET status=? WHERE task_id=? AND status<>?",
+        [(status, task_id, status) for task_id, status in worst.items()],
+    )
+
+
+def store_cycle(conn, sample, tasks, disks=()):
     """Persist one collection cycle atomically and mark unseen tasks as gone."""
     ts = sample["timestamp"]
     with transaction(conn):
         sample_id = conn.execute(
-            "INSERT INTO samples(timestamp,hostname,cpu_percent,memory_percent,load1,"
-            "disk_used_percent) VALUES(?,?,?,?,?,?)",
-            (
-                ts,
-                sample["hostname"],
-                sample["cpu_percent"],
-                sample["memory_percent"],
-                sample["load1"],
-                sample["disk_used_percent"],
-            ),
+            _insert_sql("samples", SAMPLE_COLUMNS), {c: sample.get(c) for c in SAMPLE_COLUMNS}
         ).lastrowid
         conn.executemany(
             """INSERT INTO tasks(task_id,category,name,command,unit,first_seen,last_seen,
@@ -127,16 +248,32 @@ def store_cycle(conn, sample, tasks):
             [{**t, "ts": ts} for t in tasks],
         )
         conn.executemany(
-            """INSERT INTO task_samples(task_id,sample_id,timestamp,pid,raw_status,cpu_percent,
-                                        memory_percent,rss_bytes,process_count,num_threads,num_fds)
-               VALUES(:task_id,:sample_id,:ts,:pid,:raw_status,:cpu_percent,:memory_percent,
-                      :rss_bytes,:process_count,:num_threads,:num_fds)""",
-            [{**t, "ts": ts, "sample_id": sample_id} for t in tasks],
+            _insert_sql(
+                "task_samples", ["task_id", "sample_id", "timestamp", *TASK_SAMPLE_COLUMNS]
+            ),
+            [
+                {
+                    "task_id": t["task_id"],
+                    "sample_id": sample_id,
+                    "timestamp": ts,
+                    **{c: t.get(c) for c in TASK_SAMPLE_COLUMNS},
+                }
+                for t in tasks
+                if t.get("store_sample", True)
+            ],
+        )
+        conn.executemany(
+            _insert_sql("disk_samples", ["sample_id", "timestamp", *DISK_COLUMNS]),
+            [
+                {"sample_id": sample_id, "timestamp": ts, **{c: d.get(c) for c in DISK_COLUMNS}}
+                for d in disks
+            ],
         )
         conn.execute(
             "UPDATE tasks SET state='gone', status='gone' WHERE state='active' AND last_seen<>?",
             (ts,),
         )
+        apply_task_status(conn)
     return sample_id
 
 
@@ -158,6 +295,12 @@ def prune(conn, task_samples_hours, samples_days, now=None):
             ).rowcount,
             "tasks": conn.execute(
                 "DELETE FROM tasks WHERE state='gone' AND last_seen<?", (task_samples_cutoff,)
+            ).rowcount,
+            "disk_samples": conn.execute(
+                "DELETE FROM disk_samples WHERE timestamp<?", (samples_cutoff,)
+            ).rowcount,
+            "findings": conn.execute(
+                "DELETE FROM findings WHERE status='resolved' AND resolved_at<?", (samples_cutoff,)
             ).rowcount,
         }
     return deleted

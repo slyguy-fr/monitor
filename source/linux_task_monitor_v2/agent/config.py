@@ -92,6 +92,29 @@ def load_thresholds() -> Thresholds:
 
 
 @dataclass(frozen=True)
+class LLMSettings:
+    model: str | None = None
+    api_key: str | None = None
+    base_url: str = "https://api.openai.com/v1"
+    timeout_seconds: int = 60
+    min_interval_seconds: int = 600
+
+    @property
+    def enabled(self):
+        return bool(self.model)
+
+
+def load_llm_settings() -> LLMSettings:
+    return LLMSettings(
+        model=os.environ.get("LTM_LLM_MODEL") or None,
+        api_key=os.environ.get("LTM_LLM_API_KEY") or None,
+        base_url=os.environ.get("LTM_LLM_BASE_URL") or LLMSettings.base_url,
+        timeout_seconds=_env_int("LTM_LLM_TIMEOUT_SECONDS", 60),
+        min_interval_seconds=_env_int("LTM_LLM_MIN_INTERVAL_SECONDS", 600),
+    )
+
+
+@dataclass(frozen=True)
 class Settings:
     db_path: Path
     interval_seconds: int
@@ -101,6 +124,7 @@ class Settings:
     samples_retention_days: int
     retention_check_seconds: int
     thresholds: Thresholds = field(default_factory=Thresholds)
+    llm: LLMSettings = field(default_factory=LLMSettings)
 
 
 def load_settings() -> Settings:
@@ -113,4 +137,5 @@ def load_settings() -> Settings:
         samples_retention_days=_env_int("LTM_SAMPLES_RETENTION_DAYS", 30),
         retention_check_seconds=_env_int("LTM_RETENTION_CHECK_SECONDS", 3600),
         thresholds=load_thresholds(),
+        llm=load_llm_settings(),
     )

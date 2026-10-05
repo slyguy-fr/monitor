@@ -50,6 +50,14 @@ function showLogin() {
   $("#token").focus();
 }
 
+function renderSummary(sm) {
+  const title = sm.source === "ai" ? `Résumé IA <span class="muted">${esc(sm.model)}</span>` : "Résumé";
+  const when = sm.created_at ? `<span class="muted">· ${esc(fmtTime(sm.created_at))}</span>` : "";
+  const error = sm.error ? `<p class="muted">IA indisponible (${esc(sm.error)}) : résumé automatique affiché.</p>` : "";
+  const text = esc(sm.text).replace(/`([^`]+)`/g, "<code>$1</code>");
+  $("#summary").innerHTML = `<h2>${title} ${when}</h2><div class="text">${text}</div>${error}`;
+}
+
 function renderCards(s, problems) {
   const loadRatio = s.load1 != null && s.cpu_count ? (s.load1 / s.cpu_count) * 100 : null;
   const open = problems.filter((p) => !isAcked(p));
@@ -234,16 +242,18 @@ async function showTask(taskId) {
 async function refresh() {
   try {
     const hours = $("#hours").value;
-    const [latest, history, disks, problems] = await Promise.all([
+    const [latest, history, disks, problems, summary] = await Promise.all([
       api("/system/latest"),
       api(`/system/history?hours=${hours}`),
       api("/disks/latest"),
       api("/recommendations?include_acked=true"),
+      api("/summary"),
     ]);
     $("#login").hidden = true;
     $("#app").hidden = false;
     $("#host").textContent = latest.hostname || "";
     $("#updated").textContent = latest.timestamp ? `dernière mesure ${fmtTime(latest.timestamp)}` : "aucune donnée";
+    renderSummary(summary);
     renderCards(latest, problems);
     renderProblems(problems);
     renderCharts(history);

@@ -73,6 +73,7 @@ def test_v1_database_is_migrated_in_place(db_path):
     assert {"findings", "disk_samples"} <= tables
     finding_cols = {r["name"] for r in conn.execute("PRAGMA table_info(findings)")}
     assert {"context", "acked_until"} <= finding_cols
+    assert "summaries" in {r[0] for r in conn.execute("SELECT name FROM sqlite_master")}
     sample_cols = {r["name"] for r in conn.execute("PRAGMA table_info(samples)")}
     assert {"psi_memory_some", "oom_kill_total", "swap_percent"} <= sample_cols
 
@@ -106,5 +107,6 @@ def test_prune_applies_retention(db_path):
         "tasks": 1,
         "disk_samples": 0,
         "findings": 0,
+        "summaries": 0,
     }
     assert [r[0] for r in conn.execute("SELECT task_id FROM tasks")] == ["new"]

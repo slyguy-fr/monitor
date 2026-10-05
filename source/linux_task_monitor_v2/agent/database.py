@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from .config import load_settings
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
 BASE_SCHEMA = [
@@ -118,7 +118,19 @@ MIGRATIONS = {
         "ALTER TABLE findings ADD COLUMN context TEXT",
         "ALTER TABLE findings ADD COLUMN acked_until TEXT",
     ],
+    5: [
+        """CREATE TABLE summaries(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL,
+            fingerprint TEXT NOT NULL,
+            source TEXT NOT NULL,
+            model TEXT,
+            finding_count INTEGER NOT NULL,
+            text TEXT NOT NULL,
+            error TEXT)""",
+    ],
 }
+SUMMARIES_KEPT = 100
 
 SEVERITY_RANK = {"ok": 0, "info": 0, "warning": 1, "critical": 2}
 
@@ -305,6 +317,10 @@ def prune(conn, task_samples_hours, samples_days, now=None):
             ).rowcount,
             "findings": conn.execute(
                 "DELETE FROM findings WHERE status='resolved' AND resolved_at<?", (samples_cutoff,)
+            ).rowcount,
+            "summaries": conn.execute(
+                "DELETE FROM summaries WHERE id <= (SELECT MAX(id) FROM summaries) - ?",
+                (SUMMARIES_KEPT,),
             ).rowcount,
         }
     return deleted

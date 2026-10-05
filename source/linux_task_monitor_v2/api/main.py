@@ -13,6 +13,7 @@ from agent.analyzer import analyze_task, open_findings
 from agent.database import TIMESTAMP_FORMAT, get_connection, init_db, transaction
 from agent.findings import FINDING_SELECT, SEVERITY_ORDER, decode
 from agent.recommendations import recommend
+from agent.summary import latest_summary
 
 VERSION = "0.6.0"
 TASK_NOT_FOUND = "Task not found"
@@ -198,6 +199,16 @@ def recommendations(severity: str | None = None, include_acked: bool = False):
         return open_findings(
             c, severity=severity, include_acked=include_acked, with_recommendation=True
         )
+    finally:
+        c.close()
+
+
+@router.get("/summary")
+def summary():
+    """Latest plain-language summary of the open findings (AI-written when configured)."""
+    c = get_connection()
+    try:
+        return latest_summary(c)
     finally:
         c.close()
 

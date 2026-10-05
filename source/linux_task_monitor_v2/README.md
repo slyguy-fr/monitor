@@ -41,6 +41,10 @@ L'API expose les lignes de commande des processus (mots de passe et jetons masqu
 | `LTM_RETENTION_CHECK_SECONDS` | `3600` | Fréquence du nettoyage |
 | `LTM_ANALYSIS_INTERVAL_SECONDS` | `60` | Fréquence d'exécution des détecteurs |
 | `LTM_API_TOKEN` | *(vide)* | Si défini, l'API exige `Authorization: Bearer <jeton>` (sauf `/` et `/health`) |
+| `LTM_LLM_MODEL` | *(vide)* | Modèle du résumé IA (ex. `gpt-4o-mini`) ; vide = résumé automatique sans IA |
+| `LTM_LLM_API_KEY` | *(vide)* | Clé de l'API (inutile pour Ollama) |
+| `LTM_LLM_BASE_URL` | `https://api.openai.com/v1` | Toute API compatible OpenAI (Azure OpenAI, Mistral, Ollama `http://127.0.0.1:11434/v1`…) |
+| `LTM_LLM_MIN_INTERVAL_SECONDS` | `600` | Délai minimal entre deux appels à l'IA |
 | `LTM_THRESHOLD_<NOM>` | voir `agent/config.py` | Seuil d'un détecteur, ex. `LTM_THRESHOLD_TASK_CPU_PERCENT=90` |
 
 ## Détection des problèmes
@@ -81,9 +85,13 @@ Ouvrez `http://127.0.0.1:8000/` dans un navigateur (redirige vers `/ui/`) :
 
 La page n'utilise aucune ressource externe. Si `LTM_API_TOKEN` est défini, elle demande le jeton (conservé dans le navigateur). Depuis un autre poste : `ssh -L 8000:127.0.0.1:8000 serveur` puis `http://127.0.0.1:8000/`.
 
+## Résumé IA
+
+Après chaque analyse, si la liste des problèmes ouverts a changé (ouverture, résolution, gravité, acquittement), l'agent écrit un résumé : état général, problèmes par priorité, trois premières actions. Avec `LTM_LLM_MODEL`, il est rédigé par l'IA à partir des findings, recommandations et diagnostics (secrets masqués, au plus un appel toutes les `LTM_LLM_MIN_INTERVAL_SECONDS`) ; sinon, ou si l'IA ne répond pas, un résumé automatique est construit localement. Il est affiché en haut du tableau de bord et disponible sur `/summary`. Un abonnement ChatGPT ne donne pas accès à l'API : il faut une clé créée sur platform.openai.com.
+
 ## Endpoints
 
-`/system/latest`, `/system/history?hours=6&points=240`, `/disks/latest`, `/tasks/top?by=cpu|memory`, `/tasks`, `/tasks/{task_id}`, `/tasks/{task_id}/history`, `/tasks/{task_id}/analysis`, `/recommendations`, `/analysis`, `/findings`, `/findings/{id}`, `POST /findings/{id}/ack`
+`/system/latest`, `/system/history?hours=6&points=240`, `/disks/latest`, `/tasks/top?by=cpu|memory`, `/tasks`, `/tasks/{task_id}`, `/tasks/{task_id}/history`, `/tasks/{task_id}/analysis`, `/recommendations`, `/summary`, `/analysis`, `/findings`, `/findings/{id}`, `POST /findings/{id}/ack`
 
 - `/recommendations?severity=critical&include_acked=false` : findings ouverts, les plus graves en premier, chacun avec sa recommandation (`/analysis` en est un alias) :
   ```json

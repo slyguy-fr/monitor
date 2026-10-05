@@ -75,3 +75,8 @@ tr.clickable:hover { background: var(--bg); }
 #task-detail { padding: 1rem; }
 #task-detail header { position: static; padding: 0; border: 0; background: none; margin-bottom: .5rem; }
 .error { color: var(--critical); }
+.summary { background: var(--panel); border: 1px solid var(--border); border-left: 4px solid var(--accent);
+  border-radius: 8px; padding: .75rem 1rem; }
+.summary h2 { margin-bottom: .35rem; }
+.summary .text { white-space: pre-wrap; }
+.summary code { background: var(--bg); padding: .05rem .3rem; border-radius: 4px; }

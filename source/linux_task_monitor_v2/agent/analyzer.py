@@ -26,15 +26,6 @@ def open_findings(
     return findings
 
 
-def analyze_latest():
-    """Open, non-acknowledged findings, most severe first."""
-    c = get_connection()
-    try:
-        return open_findings(c)
-    finally:
-        c.close()
-
-
 def analyze_task(tid):
     """Return statistics and open findings for a task, or None if the task does not exist."""
     c = get_connection()

@@ -87,10 +87,6 @@ def _head(n):
     return lambda out: "\n".join(out.splitlines()[:n])
 
 
-def _tail(n):
-    return lambda out: "\n".join(out.splitlines()[-n:])
-
-
 def _matching(*needles, limit=20):
     def keep(out):
         lines = [line for line in out.splitlines() if any(n in line.lower() for n in needles)]

@@ -22,6 +22,19 @@ SYSTEMD_SHOW_PROPERTIES = (
     "MemoryCurrent,CPUUsageNSec,ExecMainStatus"
 )
 SYSTEMD_UNITS_PER_CALL = 100
+SECRET_WORDS = r"(?:password|passwd|pwd|pass|token|secret|api[-_]?key|access[-_]?key|auth)"
+REDACTIONS = [
+    (re.compile(rf"(--?{SECRET_WORDS}[\w-]*[= ])(?!-)\S+", re.IGNORECASE), r"\1***"),
+    (re.compile(rf"(\b\w*{SECRET_WORDS}\w*=)[^\s&]+", re.IGNORECASE), r"\1***"),
+    (re.compile(r"(\b[a-z][a-z0-9+.-]*://[^:/\s@]+:)[^@\s]+@", re.IGNORECASE), r"\1***@"),
+]
+
+
+def redact(text):
+    """Mask secrets commonly passed on command lines (passwords, tokens, URL credentials)."""
+    for pattern, replacement in REDACTIONS:
+        text = pattern.sub(replacement, text or "")
+    return text
 
 
 def utc_timestamp() -> str:
@@ -252,7 +265,7 @@ def build_process_tasks(infos):
                 "task_id": task_id("process", identity),
                 "category": "process",
                 "name": leader.get("name") or "unknown",
-                "command": cmdline or exe or leader.get("name") or "unknown",
+                "command": redact(cmdline or exe or leader.get("name") or "unknown"),
                 "unit": leader.get("unit"),
                 "pid": leader["pid"],
                 "raw_status": _group_status(status_counts),

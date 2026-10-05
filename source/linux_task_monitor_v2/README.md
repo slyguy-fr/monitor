@@ -1,8 +1,22 @@
 # Linux Task Monitor V2
 
-L'agent collecte toutes les 15 s l'état du système, des processus (regroupés par programme) et des services systemd dans une base SQLite. L'API expose ces données et leur historique.
+L'agent collecte toutes les 15 s l'état du système, des processus (regroupés par programme) et des services systemd dans une base SQLite. Toutes les minutes il analyse l'historique, détecte les problèmes (*findings*), recueille des diagnostics et propose des solutions. Il ne modifie jamais le système : les actions sont des propositions.
 
-## Installation
+## Installation sur un serveur
+
+```
+sudo ./install.sh
+curl http://127.0.0.1:8000/recommendations
+```
+
+Le script installe le code dans `/opt/linux-task-monitor`, crée l'utilisateur `ltm`, la base dans `/var/lib/linux-task-monitor`, la configuration dans `/etc/linux-task-monitor/monitor.env` et deux services :
+
+- `linux-task-monitor` (agent) : tourne en root pour voir tous les processus, leurs descripteurs et le journal ; durci (`ProtectSystem=strict`, `NoNewPrivileges`, écriture limitée à sa base, priorité CPU/disque basse).
+- `linux-task-monitor-api` : tourne en `ltm`, écoute sur `127.0.0.1:8000`. Pour l'exposer, définissez `LTM_API_HOST` et `LTM_API_TOKEN` dans `monitor.env` (en-tête `Authorization: Bearer <jeton>`).
+
+Une ancienne base `/opt/linux-task-monitor/monitor.db` n'est pas déplacée automatiquement.
+
+## Développement
 
 ```
 python3 -m venv .venv
@@ -13,7 +27,7 @@ pip install -r requirements.txt
 Agent : `python -m agent.main`
 API : `python -m uvicorn api.main:app --host 127.0.0.1 --port 8000`
 
-L'API expose les lignes de commande des processus : ne l'écoutez pas sur `0.0.0.0` sans protection.
+L'API expose les lignes de commande des processus (mots de passe et jetons masqués) : ne l'écoutez pas sur `0.0.0.0` sans `LTM_API_TOKEN`.
 
 ## Configuration (variables d'environnement)
 
@@ -26,6 +40,7 @@ L'API expose les lignes de commande des processus : ne l'écoutez pas sur `0.0.0
 | `LTM_SAMPLES_RETENTION_DAYS` | `30` | Rétention des mesures système |
 | `LTM_RETENTION_CHECK_SECONDS` | `3600` | Fréquence du nettoyage |
 | `LTM_ANALYSIS_INTERVAL_SECONDS` | `60` | Fréquence d'exécution des détecteurs |
+| `LTM_API_TOKEN` | *(vide)* | Si défini, l'API exige `Authorization: Bearer <jeton>` (sauf `/` et `/health`) |
 | `LTM_THRESHOLD_<NOM>` | voir `agent/config.py` | Seuil d'un détecteur, ex. `LTM_THRESHOLD_TASK_CPU_PERCENT=90` |
 
 ## Détection des problèmes
@@ -58,11 +73,22 @@ Toutes les `LTM_ANALYSIS_INTERVAL_SECONDS`, l'agent analyse l'historique (pas se
 
 ## Endpoints
 
-`/system/latest`, `/tasks`, `/tasks/{task_id}`, `/tasks/{task_id}/history`, `/tasks/{task_id}/analysis`, `/analysis`, `/findings`, `/findings/{id}`
+`/system/latest`, `/tasks`, `/tasks/{task_id}`, `/tasks/{task_id}/history`, `/tasks/{task_id}/analysis`, `/recommendations`, `/analysis`, `/findings`, `/findings/{id}`, `POST /findings/{id}/ack`
 
-- `/analysis` : findings ouverts, les plus graves en premier.
+- `/recommendations?severity=critical&include_acked=false` : findings ouverts, les plus graves en premier, chacun avec sa recommandation (`/analysis` en est un alias) :
+  ```json
+  {"summary": "Service en échec : nginx.service (exit-code)",
+   "probable_causes": ["Le programme s'est arrêté en erreur (code 1) : configuration invalide, …"],
+   "actions": [{"title": "Lire l'erreur dans le journal", "command": "journalctl -u nginx.service -n 100 --no-pager", "risk": "safe"},
+               {"title": "Tester la configuration", "command": "nginx -t", "risk": "safe"},
+               {"title": "Après correction, redémarrer le service", "command": "systemctl restart nginx.service", "risk": "low"}],
+   "diagnostics": [{"title": "Derniers journaux du service", "command": "journalctl -u nginx.service -n 30 …", "output": "…"}]}
+  ```
+  `risk` : `safe` (lecture seule), `low` (modification réversible), `disruptive` (interrompt un service).
+- Les diagnostics (journal du service, `du`, `ps`, fichiers supprimés encore ouverts, messages OOM…) sont recueillis une seule fois, à l'ouverture du finding, en lecture seule, avec délai maximal et priorité basse.
+- `POST /findings/{id}/ack?hours=24` : masque un finding de `/recommendations` pendant N heures (`hours=0` annule).
 - `/findings?status=open|resolved&severity=warning|critical&detector=memory_leak&task_id=...` (par défaut : ouverts).
-- `/tasks/{task_id}/analysis` inclut les findings ouverts de la tâche.
+- `/tasks/{task_id}` inclut `open_findings` ; `/tasks/{task_id}/analysis` inclut les findings avec leur recommandation.
 
 Filtres : `/tasks?category=process|systemd`, `/tasks?status=ok|warning|critical|gone`, `/tasks?state=active|gone`, `/tasks?name=postgres`
 

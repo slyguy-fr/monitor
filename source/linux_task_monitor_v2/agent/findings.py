@@ -74,7 +74,16 @@ def run_analysis(conn, thresholds):
     return reconcile(conn, detected, failed, latest["timestamp"], thresholds.resolve_after_runs)
 
 
+SEVERITY_ORDER = "CASE f.severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END"
+FINDING_SELECT = """SELECT f.*, t.name task_name, t.unit task_unit, t.category task_category,
+    (SELECT s.pid FROM task_samples s WHERE s.task_id = f.task_id ORDER BY s.id DESC LIMIT 1) pid
+    FROM findings f LEFT JOIN tasks t ON t.task_id = f.task_id"""
+NOT_ACKED = "(f.acked_until IS NULL OR f.acked_until <= ?)"
+
+
 def decode(row):
     finding = dict(row)
     finding["evidence"] = json.loads(finding.get("evidence") or "{}")
+    if "context" in finding:
+        finding["context"] = json.loads(finding["context"]) if finding["context"] else None
     return finding

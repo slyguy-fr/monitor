@@ -1,13 +1,18 @@
+import os
+import secrets
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query
 
-from agent.analyzer import SEVERITY_ORDER, analyze_latest, analyze_task
-from agent.database import get_connection, init_db
-from agent.findings import decode
+from agent.analyzer import analyze_task, open_findings
+from agent.database import TIMESTAMP_FORMAT, get_connection, init_db, transaction
+from agent.findings import FINDING_SELECT, SEVERITY_ORDER, decode
+from agent.recommendations import recommend
 
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 TASK_NOT_FOUND = "Task not found"
+FINDING_NOT_FOUND = "Finding not found"
 
 
 @asynccontextmanager
@@ -16,7 +21,22 @@ async def lifespan(_app):
     yield
 
 
+def require_token(authorization: str | None = Header(None)):
+    """Bearer token check, enabled when LTM_API_TOKEN is set."""
+    expected = os.environ.get("LTM_API_TOKEN")
+    if not expected:
+        return
+    scheme, _, token = (authorization or "").partition(" ")
+    if scheme.lower() != "bearer" or not secrets.compare_digest(token, expected):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
 app = FastAPI(title="Linux Task Monitor", version=VERSION, lifespan=lifespan)
+router = APIRouter(dependencies=[Depends(require_token)])
 
 
 def _fetch_one(sql, params=()):
@@ -42,6 +62,13 @@ def _require_task(task_id):
     return dict(row)
 
 
+def _require_finding(finding_id):
+    row = _fetch_one(FINDING_SELECT + " WHERE f.id=?", (finding_id,))
+    if not row:
+        raise HTTPException(status_code=404, detail=FINDING_NOT_FOUND)
+    return decode(row)
+
+
 @app.get("/")
 def root():
     return {"application": "Linux Task Monitor", "version": VERSION, "status": "ok"}
@@ -52,13 +79,13 @@ def health():
     return {"status": "healthy"}
 
 
-@app.get("/system/latest")
+@router.get("/system/latest")
 def system_latest():
     r = _fetch_one("SELECT * FROM samples ORDER BY id DESC LIMIT 1")
     return dict(r) if r else {"message": "Aucune donnée"}
 
 
-@app.get("/tasks")
+@router.get("/tasks")
 def tasks(
     category: str | None = None,
     status: str | None = None,
@@ -85,12 +112,18 @@ def tasks(
     return _fetch_all(sql, p)
 
 
-@app.get("/tasks/{task_id}")
+@router.get("/tasks/{task_id}")
 def task(task_id: str):
-    return _require_task(task_id)
+    result = _require_task(task_id)
+    c = get_connection()
+    try:
+        result["open_findings"] = open_findings(c, task_id, include_acked=True)
+    finally:
+        c.close()
+    return result
 
 
-@app.get("/tasks/{task_id}/history")
+@router.get("/tasks/{task_id}/history")
 def history(task_id: str, limit: int = Query(100, ge=1, le=1000)):
     _require_task(task_id)
     return _fetch_all(
@@ -99,7 +132,7 @@ def history(task_id: str, limit: int = Query(100, ge=1, le=1000)):
     )
 
 
-@app.get("/tasks/{task_id}/analysis")
+@router.get("/tasks/{task_id}/analysis")
 def task_analysis(task_id: str):
     result = analyze_task(task_id)
     if result is None:
@@ -107,12 +140,24 @@ def task_analysis(task_id: str):
     return result
 
 
-@app.get("/analysis")
+@router.get("/recommendations")
+def recommendations(severity: str | None = None, include_acked: bool = False):
+    """Open findings, most severe first, each with probable causes and proposed actions."""
+    c = get_connection()
+    try:
+        return open_findings(
+            c, severity=severity, include_acked=include_acked, with_recommendation=True
+        )
+    finally:
+        c.close()
+
+
+@router.get("/analysis")
 def analysis():
-    return {"findings": analyze_latest()}
+    return {"findings": recommendations()}
 
 
-@app.get("/findings")
+@router.get("/findings")
 def findings(
     status: str | None = "open",
     severity: str | None = None,
@@ -120,7 +165,7 @@ def findings(
     task_id: str | None = None,
     limit: int = Query(100, ge=1, le=1000),
 ):
-    sql = "SELECT * FROM findings WHERE 1=1"
+    sql = FINDING_SELECT + " WHERE 1=1"
     p = []
     for column, value in (
         ("status", status),
@@ -129,16 +174,34 @@ def findings(
         ("task_id", task_id),
     ):
         if value:
-            sql += f" AND {column}=?"
+            sql += f" AND f.{column}=?"
             p.append(value)
-    sql += f" ORDER BY {SEVERITY_ORDER}, last_seen DESC LIMIT ?"
+    sql += f" ORDER BY {SEVERITY_ORDER}, f.last_seen DESC LIMIT ?"
     p.append(limit)
     return [decode(r) for r in _fetch_all(sql, p)]
 
 
-@app.get("/findings/{finding_id}")
+@router.get("/findings/{finding_id}")
 def finding(finding_id: int):
-    row = _fetch_one("SELECT * FROM findings WHERE id=?", (finding_id,))
-    if not row:
-        raise HTTPException(status_code=404, detail="Finding not found")
-    return decode(row)
+    result = _require_finding(finding_id)
+    result["recommendation"] = recommend(result)
+    return result
+
+
+@router.post("/findings/{finding_id}/ack")
+def acknowledge(finding_id: int, hours: float = Query(24, ge=0, le=24 * 30)):
+    """Hide a finding from /recommendations for `hours` (0 removes the acknowledgement)."""
+    _require_finding(finding_id)
+    until = None
+    if hours:
+        until = (datetime.now(timezone.utc) + timedelta(hours=hours)).strftime(TIMESTAMP_FORMAT)
+    c = get_connection()
+    try:
+        with transaction(c):
+            c.execute("UPDATE findings SET acked_until=? WHERE id=?", (until, finding_id))
+    finally:
+        c.close()
+    return _require_finding(finding_id)
+
+
+app.include_router(router)

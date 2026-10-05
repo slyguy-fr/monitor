@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from .config import load_settings
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
 BASE_SCHEMA = [
@@ -113,6 +113,10 @@ MIGRATIONS = {
         "CREATE UNIQUE INDEX idx_findings_open_key ON findings(key) WHERE status='open'",
         "CREATE INDEX idx_findings_status ON findings(status, severity)",
         "CREATE INDEX idx_findings_task ON findings(task_id)",
+    ],
+    4: [
+        "ALTER TABLE findings ADD COLUMN context TEXT",
+        "ALTER TABLE findings ADD COLUMN acked_until TEXT",
     ],
 }
 

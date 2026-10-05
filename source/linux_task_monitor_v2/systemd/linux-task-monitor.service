@@ -7,5 +7,6 @@ WorkingDirectory=/opt/linux-task-monitor
 ExecStart=/opt/linux-task-monitor/.venv/bin/python -m agent.main
 Restart=always
 RestartSec=5
+KillSignal=SIGTERM
 [Install]
 WantedBy=multi-user.target

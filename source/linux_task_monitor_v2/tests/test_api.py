@@ -90,3 +90,55 @@ def test_api_token(client, monkeypatch):
     assert client.get("/tasks").status_code == 401
     assert client.get("/tasks", headers={"Authorization": "Bearer wrong"}).status_code == 401
     assert client.get("/tasks", headers={"Authorization": "Bearer s3cret"}).status_code == 200
+
+
+def test_dashboard_is_served(client):
+    assert client.get("/").json()["status"] == "ok"
+    browser = client.get("/", headers={"Accept": "text/html"}, follow_redirects=False)
+    assert browser.status_code == 307 and browser.headers["location"] == "/ui/"
+    page = client.get("/ui/")
+    assert page.status_code == 200 and "Linux Task Monitor" in page.text
+    assert client.get("/ui/app.js").status_code == 200
+
+
+def test_dashboard_page_is_public_but_data_needs_token(client, monkeypatch):
+    monkeypatch.setenv("LTM_API_TOKEN", "s3cret")
+    assert client.get("/ui/").status_code == 200
+    for path in ("/system/history", "/disks/latest", "/tasks/top"):
+        assert client.get(path).status_code == 401
+
+
+def test_system_history_buckets(client):
+    assert len(client.get("/system/history?hours=1").json()) == 2
+    rows = client.get("/system/history?hours=1&points=10").json()
+    assert len(rows) == 1
+    assert rows[0]["timestamp"] == "2026-01-01T00:00:00Z" and rows[0]["cpu_percent"] == 10.0
+
+
+def test_system_history_empty(db_path):
+    with TestClient(app) as c:
+        assert c.get("/system/history").json() == []
+
+
+def test_top_tasks_uses_latest_cycle(client):
+    assert [t["task_id"] for t in client.get("/tasks/top").json()] == ["a"]
+    assert client.get("/tasks/top?by=memory").json()[0]["rss_bytes"] == 10
+    assert client.get("/tasks/top?by=bogus").status_code == 422
+
+
+def test_disks_latest(client):
+    disk = {
+        "mountpoint": "/",
+        "device": "/dev/vda1",
+        "fstype": "ext4",
+        "total_bytes": 100,
+        "used_bytes": 40,
+        "free_bytes": 60,
+        "used_percent": 40.0,
+        "inodes_percent": 3.0,
+    }
+    conn = connect()
+    store_cycle(conn, sample("2026-01-01T00:00:30Z"), [task("a")], [disk])
+    store_cycle(conn, sample("2026-01-01T00:00:45Z"), [task("a")], [disk | {"used_percent": 41.0}])
+    conn.close()
+    assert [d["used_percent"] for d in client.get("/disks/latest").json()] == [41.0]

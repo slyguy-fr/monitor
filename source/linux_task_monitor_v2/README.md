@@ -71,9 +71,19 @@ Toutes les `LTM_ANALYSIS_INTERVAL_SECONDS`, l'agent analyse l'historique (pas se
 - `disk_samples` : utilisation de chaque point de montage local (octets et inodes) à chaque cycle.
 - La base existante est migrée automatiquement au démarrage.
 
+## Tableau de bord
+
+Ouvrez `http://127.0.0.1:8000/` dans un navigateur (redirige vers `/ui/`) :
+
+- état actuel (CPU, mémoire, swap, charge, iowait, pression mémoire) et graphiques sur 1 à 48 h ;
+- problèmes ouverts avec causes probables, actions proposées (bouton « Copier ») et diagnostics, bouton « Ignorer 24 h » ;
+- disques, plus gros consommateurs CPU/mémoire, recherche de tâche et historique d'une tâche.
+
+La page n'utilise aucune ressource externe. Si `LTM_API_TOKEN` est défini, elle demande le jeton (conservé dans le navigateur). Depuis un autre poste : `ssh -L 8000:127.0.0.1:8000 serveur` puis `http://127.0.0.1:8000/`.
+
 ## Endpoints
 
-`/system/latest`, `/tasks`, `/tasks/{task_id}`, `/tasks/{task_id}/history`, `/tasks/{task_id}/analysis`, `/recommendations`, `/analysis`, `/findings`, `/findings/{id}`, `POST /findings/{id}/ack`
+`/system/latest`, `/system/history?hours=6&points=240`, `/disks/latest`, `/tasks/top?by=cpu|memory`, `/tasks`, `/tasks/{task_id}`, `/tasks/{task_id}/history`, `/tasks/{task_id}/analysis`, `/recommendations`, `/analysis`, `/findings`, `/findings/{id}`, `POST /findings/{id}/ack`
 
 - `/recommendations?severity=critical&include_acked=false` : findings ouverts, les plus graves en premier, chacun avec sa recommandation (`/analysis` en est un alias) :
   ```json

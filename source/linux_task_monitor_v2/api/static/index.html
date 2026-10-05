@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Linux Task Monitor</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>Linux Task Monitor</h1>
+  <span id="host"></span>
+  <span id="updated" class="muted"></span>
+  <label class="muted">Période
+    <select id="hours">
+      <option value="1">1 h</option>
+      <option value="6" selected>6 h</option>
+      <option value="24">24 h</option>
+      <option value="48">48 h</option>
+    </select>
+  </label>
+  <button id="refresh" type="button">Rafraîchir</button>
+</header>
+
+<form id="login" hidden>
+  <p>L'API est protégée par un jeton (<code>LTM_API_TOKEN</code>).</p>
+  <input id="token" type="password" placeholder="Jeton" autocomplete="current-password">
+  <button type="submit">Se connecter</button>
+</form>
+
+<main id="app" hidden>
+  <section id="cards" class="cards"></section>
+
+  <section>
+    <h2>Problèmes <span id="problem-count" class="muted"></span></h2>
+    <div id="problems"></div>
+  </section>
+
+  <section class="grid2">
+    <div>
+      <h2>CPU, mémoire, swap (%)</h2>
+      <div id="chart-usage" class="chart"></div>
+    </div>
+    <div>
+      <h2>Charge et attente disque</h2>
+      <div id="chart-load" class="chart"></div>
+    </div>
+  </section>
+
+  <section class="grid2">
+    <div>
+      <h2>Disques</h2>
+      <table id="disks"></table>
+    </div>
+    <div>
+      <h2>Tâches
+        <span class="tabs">
+          <button type="button" data-top="cpu" class="active">CPU</button>
+          <button type="button" data-top="memory">Mémoire</button>
+        </span>
+      </h2>
+      <input id="search" type="search" placeholder="Rechercher une tâche (nom)…">
+      <table id="tasks"></table>
+    </div>
+  </section>
+
+  <section id="task-detail" hidden></section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

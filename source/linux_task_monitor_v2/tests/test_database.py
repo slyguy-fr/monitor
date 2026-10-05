@@ -69,6 +69,10 @@ def test_v1_database_is_migrated_in_place(db_path):
     row = conn.execute("SELECT status,state FROM tasks WHERE task_id='a'").fetchone()
     assert (row["status"], row["state"]) == ("ok", "active")
     assert conn.execute("SELECT raw_status FROM task_samples").fetchone()[0] == "sleeping"
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert {"findings", "disk_samples"} <= tables
+    sample_cols = {r["name"] for r in conn.execute("PRAGMA table_info(samples)")}
+    assert {"psi_memory_some", "oom_kill_total", "swap_percent"} <= sample_cols
 
 
 def test_store_cycle_upserts_and_marks_gone(db_path):
@@ -94,5 +98,11 @@ def test_prune_applies_retention(db_path):
     store_cycle(conn, sample("2026-01-01T00:00:00Z"), [task("old")])
     store_cycle(conn, sample("2026-01-03T00:00:00Z"), [task("new")])
     deleted = prune(conn, 24, 30, now=datetime(2026, 1, 3, 1, tzinfo=timezone.utc))
-    assert deleted == {"task_samples": 1, "samples": 0, "tasks": 1}
+    assert deleted == {
+        "task_samples": 1,
+        "samples": 0,
+        "tasks": 1,
+        "disk_samples": 0,
+        "findings": 0,
+    }
     assert [r[0] for r in conn.execute("SELECT task_id FROM tasks")] == ["new"]

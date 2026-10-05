@@ -2,17 +2,23 @@ import os
 import secrets
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Literal
 
-from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from agent.analyzer import analyze_task, open_findings
 from agent.database import TIMESTAMP_FORMAT, get_connection, init_db, transaction
 from agent.findings import FINDING_SELECT, SEVERITY_ORDER, decode
 from agent.recommendations import recommend
 
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 TASK_NOT_FOUND = "Task not found"
 FINDING_NOT_FOUND = "Finding not found"
+STATIC_DIR = Path(__file__).parent / "static"
+TOP_COLUMNS = {"cpu": "cpu_percent", "memory": "rss_bytes"}
 
 
 @asynccontextmanager
@@ -70,7 +76,9 @@ def _require_finding(finding_id):
 
 
 @app.get("/")
-def root():
+def root(request: Request):
+    if "text/html" in request.headers.get("accept", ""):
+        return RedirectResponse("/ui/")
     return {"application": "Linux Task Monitor", "version": VERSION, "status": "ok"}
 
 
@@ -83,6 +91,35 @@ def health():
 def system_latest():
     r = _fetch_one("SELECT * FROM samples ORDER BY id DESC LIMIT 1")
     return dict(r) if r else {"message": "Aucune donnée"}
+
+
+@router.get("/system/history")
+def system_history(
+    hours: float = Query(6, gt=0, le=24 * 30), points: int = Query(240, ge=10, le=2000)
+):
+    """System metrics averaged into at most `points` buckets over the last `hours` of data."""
+    latest = _fetch_one("SELECT MAX(timestamp) ts FROM samples")
+    if not latest or not latest["ts"]:
+        return []
+    end = datetime.strptime(latest["ts"], TIMESTAMP_FORMAT)
+    since = (end - timedelta(hours=hours)).strftime(TIMESTAMP_FORMAT)
+    bucket = max(1, int(hours * 3600 / points))
+    return _fetch_all(
+        """SELECT MIN(timestamp) timestamp, AVG(cpu_percent) cpu_percent,
+            AVG(memory_percent) memory_percent, AVG(swap_percent) swap_percent,
+            AVG(load1) load1, AVG(iowait_percent) iowait_percent, MAX(cpu_count) cpu_count
+        FROM samples WHERE timestamp >= ?
+        GROUP BY CAST(strftime('%s', timestamp) AS INTEGER) / ? ORDER BY 1""",
+        (since, bucket),
+    )
+
+
+@router.get("/disks/latest")
+def disks_latest():
+    return _fetch_all(
+        "SELECT * FROM disk_samples WHERE sample_id = (SELECT MAX(sample_id) FROM disk_samples)"
+        " ORDER BY mountpoint"
+    )
 
 
 @router.get("/tasks")
@@ -110,6 +147,19 @@ def tasks(
     sql += " ORDER BY category,name LIMIT ?"
     p.append(limit)
     return _fetch_all(sql, p)
+
+
+@router.get("/tasks/top")
+def top_tasks(by: Literal["cpu", "memory"] = "cpu", limit: int = Query(15, ge=1, le=100)):
+    """Biggest CPU or memory consumers in the latest collection cycle."""
+    return _fetch_all(
+        f"""SELECT t.task_id, t.name, t.category, t.unit, t.status, s.pid, s.cpu_percent,
+            s.memory_percent, s.rss_bytes, s.process_count
+        FROM task_samples s JOIN tasks t ON t.task_id = s.task_id
+        WHERE s.sample_id = (SELECT MAX(id) FROM samples)
+        ORDER BY s.{TOP_COLUMNS[by]} DESC, s.rss_bytes DESC LIMIT ?""",
+        (limit,),
+    )
 
 
 @router.get("/tasks/{task_id}")
@@ -205,3 +255,4 @@ def acknowledge(finding_id: int, hours: float = Query(24, ge=0, le=24 * 30)):
 
 
 app.include_router(router)
+app.mount("/ui", StaticFiles(directory=STATIC_DIR, html=True), name="ui")

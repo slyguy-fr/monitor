@@ -197,3 +197,13 @@ def test_idle_services_only_store_samples_on_change():
     changed = details | {"vncserver.service": {**details["vncserver.service"], "NRestarts": "4"}}
     third = {t["name"]: t["store_sample"] for t in collector.build_tasks(units, changed, 3, 1)}
     assert third["vncserver.service"] is True
+
+
+def test_command_line_secrets_are_redacted():
+    from agent.collector import redact
+
+    assert redact("app --password=hunter2 --port 80") == "app --password=*** --port 80"
+    assert redact("mysqldump --password secret db") == "mysqldump --password *** db"
+    assert redact("worker DB_TOKEN=abc123 run") == "worker DB_TOKEN=*** run"
+    assert redact("psql postgres://bob:pw@db/app") == "psql postgres://bob:***@db/app"
+    assert redact("nginx -g daemon off;") == "nginx -g daemon off;"

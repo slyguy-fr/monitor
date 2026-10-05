@@ -1,32 +1,32 @@
 [Unit]
-Description=Linux Task Monitor - collecte et analyse
-After=network.target
+Description=Linux Task Monitor - API
+After=network.target linux-task-monitor.service
 
 [Service]
 Type=simple
+User=ltm
+Group=ltm
 WorkingDirectory=/opt/linux-task-monitor
 Environment=LTM_DB_PATH=/var/lib/linux-task-monitor/monitor.db
+Environment=LTM_API_HOST=127.0.0.1
+Environment=LTM_API_PORT=8000
 EnvironmentFile=-/etc/linux-task-monitor/monitor.env
-ExecStart=/opt/linux-task-monitor/.venv/bin/python -m agent.main
-Restart=always
+ExecStart=/opt/linux-task-monitor/.venv/bin/python -m uvicorn api.main:app --host ${LTM_API_HOST} --port ${LTM_API_PORT}
+Restart=on-failure
 RestartSec=5
-KillSignal=SIGTERM
-# Root is needed to see every process, its file descriptors and the journal.
-# The agent only reads the system; it writes nothing outside its database.
-Group=ltm
 UMask=0007
-Nice=10
-IOSchedulingClass=idle
 NoNewPrivileges=yes
 ProtectSystem=strict
 ReadWritePaths=/var/lib/linux-task-monitor
-ProtectHome=read-only
+ProtectHome=yes
 PrivateTmp=yes
+PrivateDevices=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
+CapabilityBoundingSet=
 
 [Install]
 WantedBy=multi-user.target

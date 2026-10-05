@@ -50,3 +50,43 @@ def test_findings_endpoints(client):
     assert client.get("/analysis").json()["findings"][0]["id"] == found[0]["id"]
     task = client.get("/tasks/svc-vnc.service/analysis").json()
     assert [f["detector"] for f in task["findings"]] == ["service_failed"]
+
+
+@pytest.fixture
+def failed_service(client):
+    from agent.config import Thresholds
+    from agent.findings import run_analysis
+    from tests.helpers import Timeline, service
+
+    tl = Timeline()
+    tl.cycle([service("vnc.service", "failed", "failed", result="exit-code")])
+    run_analysis(tl.conn, Thresholds())
+    return client
+
+
+def test_recommendations_and_ack(failed_service):
+    client = failed_service
+    recs = client.get("/recommendations").json()
+    assert len(recs) == 1
+    rec = recs[0]["recommendation"]
+    assert any(a["command"] == "systemctl reset-failed vnc.service" for a in rec["actions"])
+    finding_id = recs[0]["id"]
+    assert client.get(f"/findings/{finding_id}").json()["recommendation"]["summary"]
+    assert client.get("/tasks/svc-vnc.service").json()["open_findings"][0]["id"] == finding_id
+
+    acked = client.post(f"/findings/{finding_id}/ack?hours=2").json()
+    assert acked["acked_until"]
+    assert client.get("/recommendations").json() == []
+    assert client.get("/analysis").json()["findings"] == []
+    assert len(client.get("/recommendations?include_acked=true").json()) == 1
+    assert client.post(f"/findings/{finding_id}/ack?hours=0").json()["acked_until"] is None
+    assert len(client.get("/recommendations").json()) == 1
+    assert client.post("/findings/999/ack").status_code == 404
+
+
+def test_api_token(client, monkeypatch):
+    monkeypatch.setenv("LTM_API_TOKEN", "s3cret")
+    assert client.get("/health").status_code == 200
+    assert client.get("/tasks").status_code == 401
+    assert client.get("/tasks", headers={"Authorization": "Bearer wrong"}).status_code == 401
+    assert client.get("/tasks", headers={"Authorization": "Bearer s3cret"}).status_code == 200

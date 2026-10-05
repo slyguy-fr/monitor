@@ -2,9 +2,11 @@ import logging
 import signal
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from .collector import Collector
 from .config import load_settings
+from .context import attach_contexts
 from .database import connect, init_db, prune, store_cycle
 from .findings import run_analysis
 
@@ -19,10 +21,23 @@ def _analyze(conn, settings):
         log.info("[RÉSOLU] %s", row["title"])
 
 
+def _gather_contexts(db_path):
+    conn = connect(db_path)
+    try:
+        attach_contexts(conn)
+    except Exception:
+        log.exception("Erreur pendant la collecte des diagnostics")
+    finally:
+        conn.close()
+
+
 def run(settings, stop_event):
     conn = connect(settings.db_path)
     init_db(conn)
     collector = Collector(settings.include_kernel_threads)
+    # Diagnostics (du, journalctl…) can be slow: run them off the collection loop.
+    context_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="context")
+    context_job = None
     last_prune = last_analysis = float("-inf")
     log.info("Linux Task Monitor V2 démarré (base: %s).", settings.db_path)
     try:
@@ -41,6 +56,8 @@ def run(settings, stop_event):
                 if started - last_analysis >= settings.analysis_interval_seconds:
                     last_analysis = started
                     _analyze(conn, settings)
+                    if context_job is None or context_job.done():
+                        context_job = context_pool.submit(_gather_contexts, settings.db_path)
                 if started - last_prune >= settings.retention_check_seconds:
                     last_prune = started
                     deleted = prune(
@@ -54,6 +71,7 @@ def run(settings, stop_event):
                 log.exception("Erreur pendant le cycle de collecte")
             stop_event.wait(max(0.0, settings.interval_seconds - (time.monotonic() - started)))
     finally:
+        context_pool.shutdown(wait=False, cancel_futures=True)
         conn.close()
         log.info("Arrêt.")
 

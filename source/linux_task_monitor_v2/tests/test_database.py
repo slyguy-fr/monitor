@@ -71,6 +71,8 @@ def test_v1_database_is_migrated_in_place(db_path):
     assert conn.execute("SELECT raw_status FROM task_samples").fetchone()[0] == "sleeping"
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"findings", "disk_samples"} <= tables
+    finding_cols = {r["name"] for r in conn.execute("PRAGMA table_info(findings)")}
+    assert {"context", "acked_until"} <= finding_cols
     sample_cols = {r["name"] for r in conn.execute("PRAGMA table_info(samples)")}
     assert {"psi_memory_some", "oom_kill_total", "swap_percent"} <= sample_cols
 

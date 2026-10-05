@@ -1,21 +1,33 @@
+from .collector import utc_timestamp
 from .database import get_connection
-from .findings import decode
+from .findings import FINDING_SELECT, NOT_ACKED, SEVERITY_ORDER, decode
+from .recommendations import recommend
 
-SEVERITY_ORDER = "CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END"
 
-
-def open_findings(conn, task_id=None):
-    sql = "SELECT * FROM findings WHERE status = 'open'"
+def open_findings(
+    conn, task_id=None, include_acked=False, severity=None, with_recommendation=False
+):
+    sql = FINDING_SELECT + " WHERE f.status = 'open'"
     params = []
     if task_id:
-        sql += " AND task_id = ?"
+        sql += " AND f.task_id = ?"
         params.append(task_id)
-    sql += f" ORDER BY {SEVERITY_ORDER}, first_seen"
-    return [decode(r) for r in conn.execute(sql, params)]
+    if severity:
+        sql += " AND f.severity = ?"
+        params.append(severity)
+    if not include_acked:
+        sql += " AND " + NOT_ACKED
+        params.append(utc_timestamp())
+    sql += f" ORDER BY {SEVERITY_ORDER}, f.first_seen"
+    findings = [decode(r) for r in conn.execute(sql, params)]
+    if with_recommendation:
+        for f in findings:
+            f["recommendation"] = recommend(f)
+    return findings
 
 
 def analyze_latest():
-    """Open findings, most severe first."""
+    """Open, non-acknowledged findings, most severe first."""
     c = get_connection()
     try:
         return open_findings(c)
@@ -36,6 +48,10 @@ def analyze_task(tid):
             "MAX(rss_bytes) max_rss_bytes FROM task_samples WHERE task_id=?",
             (tid,),
         ).fetchone()
-        return {"task": dict(t), "statistics": dict(s), "findings": open_findings(c, tid)}
+        return {
+            "task": dict(t),
+            "statistics": dict(s),
+            "findings": open_findings(c, tid, include_acked=True, with_recommendation=True),
+        }
     finally:
         c.close()

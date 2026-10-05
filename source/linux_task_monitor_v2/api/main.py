@@ -1,15 +1,49 @@
-from fastapi import FastAPI, Query
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, HTTPException, Query
 
 from agent.analyzer import analyze_latest, analyze_task
 from agent.database import get_connection, init_db
 
-app = FastAPI(title="Linux Task Monitor", version="0.2.0")
-init_db()
+VERSION = "0.3.0"
+TASK_NOT_FOUND = "Task not found"
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    init_db()
+    yield
+
+
+app = FastAPI(title="Linux Task Monitor", version=VERSION, lifespan=lifespan)
+
+
+def _fetch_one(sql, params=()):
+    c = get_connection()
+    try:
+        return c.execute(sql, params).fetchone()
+    finally:
+        c.close()
+
+
+def _fetch_all(sql, params=()):
+    c = get_connection()
+    try:
+        return [dict(r) for r in c.execute(sql, params).fetchall()]
+    finally:
+        c.close()
+
+
+def _require_task(task_id):
+    row = _fetch_one("SELECT * FROM tasks WHERE task_id=?", (task_id,))
+    if not row:
+        raise HTTPException(status_code=404, detail=TASK_NOT_FOUND)
+    return dict(row)
 
 
 @app.get("/")
 def root():
-    return {"application": "Linux Task Monitor", "version": "0.2.0", "status": "ok"}
+    return {"application": "Linux Task Monitor", "version": VERSION, "status": "ok"}
 
 
 @app.get("/health")
@@ -19,9 +53,7 @@ def health():
 
 @app.get("/system/latest")
 def system_latest():
-    c = get_connection()
-    r = c.execute("SELECT * FROM samples ORDER BY id DESC LIMIT 1").fetchone()
-    c.close()
+    r = _fetch_one("SELECT * FROM samples ORDER BY id DESC LIMIT 1")
     return dict(r) if r else {"message": "Aucune donnée"}
 
 
@@ -29,10 +61,10 @@ def system_latest():
 def tasks(
     category: str | None = None,
     status: str | None = None,
+    state: str | None = None,
     name: str | None = None,
     limit: int = Query(100, ge=1, le=1000),
 ):
-    c = get_connection()
     sql = "SELECT * FROM tasks WHERE 1=1"
     p = []
     if category:
@@ -41,38 +73,37 @@ def tasks(
     if status:
         sql += " AND status=?"
         p.append(status)
+    if state:
+        sql += " AND state=?"
+        p.append(state)
     if name:
         sql += " AND name LIKE ?"
         p.append("%" + name + "%")
     sql += " ORDER BY category,name LIMIT ?"
     p.append(limit)
-    r = c.execute(sql, p).fetchall()
-    c.close()
-    return [dict(x) for x in r]
+    return _fetch_all(sql, p)
 
 
 @app.get("/tasks/{task_id}")
 def task(task_id: str):
-    c = get_connection()
-    r = c.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
-    c.close()
-    return dict(r) if r else {"error": "Task not found"}
+    return _require_task(task_id)
 
 
 @app.get("/tasks/{task_id}/history")
 def history(task_id: str, limit: int = Query(100, ge=1, le=1000)):
-    c = get_connection()
-    r = c.execute(
+    _require_task(task_id)
+    return _fetch_all(
         "SELECT * FROM task_samples WHERE task_id=? ORDER BY timestamp DESC LIMIT ?",
         (task_id, limit),
-    ).fetchall()
-    c.close()
-    return [dict(x) for x in r]
+    )
 
 
 @app.get("/tasks/{task_id}/analysis")
 def task_analysis(task_id: str):
-    return analyze_task(task_id)
+    result = analyze_task(task_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail=TASK_NOT_FOUND)
+    return result
 
 
 @app.get("/analysis")

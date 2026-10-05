@@ -8,7 +8,7 @@ User=ltm
 Group=ltm
 WorkingDirectory=/opt/linux-task-monitor
 Environment=LTM_DB_PATH=/var/lib/linux-task-monitor/monitor.db
-Environment=LTM_API_HOST=127.0.0.1
+Environment=LTM_API_HOST=192.168.0.129
 Environment=LTM_API_PORT=8000
 EnvironmentFile=-/etc/linux-task-monitor/monitor.env
 ExecStart=/opt/linux-task-monitor/.venv/bin/python -m uvicorn api.main:app --host ${LTM_API_HOST} --port ${LTM_API_PORT}
